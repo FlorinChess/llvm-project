@@ -14,7 +14,6 @@
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/TargetBuiltins.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/TargetParser/X86TargetParser.h"
@@ -1109,6 +1108,10 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
 
   if (HasFloat128)
     Builder.defineMacro("__SIZEOF_FLOAT128__", "16");
+
+  if (Opts.CFProtectionReturn || Opts.CFProtectionBranch)
+    Builder.defineMacro("__CET__", Twine{(Opts.CFProtectionReturn << 1) |
+                                         Opts.CFProtectionBranch});
 }
 
 bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
@@ -1387,8 +1390,8 @@ static llvm::X86::ProcessorFeatures getFeature(StringRef Name) {
   // correct, so it asserts if the value is out of range.
 }
 
-uint64_t X86TargetInfo::getFMVPriority(ArrayRef<StringRef> Features) const {
-  auto getPriority = [](StringRef Feature) -> uint64_t {
+llvm::APInt X86TargetInfo::getFMVPriority(ArrayRef<StringRef> Features) const {
+  auto getPriority = [](StringRef Feature) -> unsigned {
     // Valid CPUs have a 'key feature' that compares just better than its key
     // feature.
     using namespace llvm::X86;
@@ -1402,11 +1405,11 @@ uint64_t X86TargetInfo::getFMVPriority(ArrayRef<StringRef> Features) const {
     return getFeaturePriority(getFeature(Feature)) << 1;
   };
 
-  uint64_t Priority = 0;
+  unsigned Priority = 0;
   for (StringRef Feature : Features)
     if (!Feature.empty())
       Priority = std::max(Priority, getPriority(Feature));
-  return Priority;
+  return llvm::APInt(32, Priority);
 }
 
 bool X86TargetInfo::validateCPUSpecificCPUDispatch(StringRef Name) const {

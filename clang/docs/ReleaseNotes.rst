@@ -34,27 +34,22 @@ latest release, please see the `Clang Web Site <https://clang.llvm.org>`_ or the
 Potentially Breaking Changes
 ============================
 
-- The Objective-C ARC migrator (ARCMigrate) has been removed.
-
 C/C++ Language Potentially Breaking Changes
 -------------------------------------------
 
+- The ``__has_builtin`` function now only considers the currently active target when being used with target offloading.
+
 C++ Specific Potentially Breaking Changes
 -----------------------------------------
-
-- The type trait builtin ``__is_referenceable`` has been removed, since it has
-  very few users and all the type traits that could benefit from it in the
-  standard library already have their own bespoke builtins.
+- For C++20 modules, the Reduced BMI mode will be the default option. This may introduce
+  regressions if your build system supports two-phase compilation model but haven't support
+  reduced BMI or it is a compiler bug or a bug in users code.
 
 ABI Changes in This Version
 ---------------------------
 
-- Return larger CXX records in memory instead of using AVX registers. Code compiled with older clang will be incompatible with newer version of the clang unless -fclang-abi-compat=20 is provided. (#GH120670)
-
 AST Dumping Potentially Breaking Changes
 ----------------------------------------
-
-- Added support for dumping template arguments of structural value kinds.
 
 Clang Frontend Potentially Breaking Changes
 -------------------------------------------
@@ -83,17 +78,8 @@ C++17 Feature Support
 Resolutions to C++ Defect Reports
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- The flag `-frelaxed-template-template-args`
-  and its negation have been removed, having been deprecated since the previous
-  two releases. The improvements to template template parameter matching implemented
-  in the previous release, as described in P3310 and P3579, made this flag unnecessary.
-
 C Language Changes
 ------------------
-
-- Clang now allows an ``inline`` specifier on a typedef declaration of a
-  function type in Microsoft compatibility mode. #GH124869
-- Clang now allows ``restrict`` qualifier for array types with pointer elements (#GH92847).
 
 C2y Feature Support
 ^^^^^^^^^^^^^^^^^^^
@@ -103,13 +89,20 @@ C23 Feature Support
 
 Non-comprehensive list of changes in this release
 -------------------------------------------------
+- Added ``__builtin_elementwise_minnumnum`` and ``__builtin_elementwise_maxnumnum``.
+
+- Trapping UBSan (e.g. ``-fsanitize-trap=undefined``) now emits a string describing the reason for 
+  trapping into the generated debug info. This feature allows debuggers (e.g. LLDB) to display 
+  the reason for trapping if the trap is reached. The string is currently encoded in the debug 
+  info as an artificial frame that claims to be inlined at the trap location. The function used 
+  for the artificial frame is an artificial function whose name encodes the reason for trapping. 
+  The encoding used is currently the same as ``__builtin_verbose_trap`` but might change in the future. 
+  This feature is enabled by default but can be disabled by compiling with 
+  ``-fno-sanitize-annotate-debug-info-traps``.
 
 New Compiler Flags
 ------------------
-
-- New option ``-fprofile-continuous`` added to enable continuous profile syncing to file (#GH124353, `docs <https://clang.llvm.org/docs/UsersManual.html#cmdoption-fprofile-continuous>`_).
-  The feature has `existed <https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program>`_)
-  for a while and this is just a user facing option.
+- New option ``-fno-sanitize-annotate-debug-info-traps`` added to disable emitting trap reasons into the debug info when compiling with trapping UBSan (e.g. ``-fsanitize-trap=undefined``).
 
 Deprecated Compiler Flags
 -------------------------
@@ -123,25 +116,15 @@ Removed Compiler Flags
 Attribute Changes in Clang
 --------------------------
 
-- The ``no_sanitize`` attribute now accepts both ``gnu`` and ``clang`` names.
-- Clang now diagnoses use of declaration attributes on void parameters. (#GH108819)
-- Clang now allows ``__attribute__((model("small")))`` and
-  ``__attribute__((model("large")))`` on non-TLS globals in x86-64 compilations.
-  This forces the global to be considered small or large in regards to the
-  x86-64 code model, regardless of the code model specified for the compilation.
-
 Improvements to Clang's diagnostics
 -----------------------------------
-
-- Improve the diagnostics for deleted default constructor errors for C++ class
-  initializer lists that don't explicitly list a class member and thus attempt
-  to implicitly default construct that member.
-- The ``-Wunique-object-duplication`` warning has been added to warn about objects
-  which are supposed to only exist once per program, but may get duplicated when
-  built into a shared library.
-- Fixed a bug where Clang's Analysis did not correctly model the destructor behavior of ``union`` members (#GH119415).
-- A statement attribute applied to a ``case`` label no longer suppresses
-  'bypassing variable initialization' diagnostics (#84072).
+- Added a separate diagnostic group ``-Wfunction-effect-redeclarations``, for the more pedantic
+  diagnostics for function effects (``[[clang::nonblocking]]`` and ``[[clang::nonallocating]]``).
+  Moved the warning for a missing (though implied) attribute on a redeclaration into this group.
+  Added a new warning in this group for the case where the attribute is missing/implicit on
+  an override of a virtual method.
+- Fixed fix-it hint for fold expressions. Clang now correctly places the suggested right 
+  parenthesis when diagnosing malformed fold expressions. (#GH151787)
 
 Improvements to Clang's time-trace
 ----------------------------------
@@ -151,33 +134,36 @@ Improvements to Coverage Mapping
 
 Bug Fixes in This Version
 -------------------------
-
-- Clang now outputs correct values when #embed data contains bytes with negative
-  signed char values (#GH102798).
+- Fix a crash when marco name is empty in ``#pragma push_macro("")`` or
+  ``#pragma pop_macro("")``. (#GH149762).
+- `-Wunreachable-code`` now diagnoses tautological or contradictory
+  comparisons such as ``x != 0 || x != 1.0`` and ``x == 0 && x == 1.0`` on
+  targets that treat ``_Float16``/``__fp16`` as native scalar types. Previously
+  the warning was silently lost because the operands differed only by an implicit
+  cast chain. (#GH149967).
 
 Bug Fixes to Compiler Builtins
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- The behvaiour of ``__add_pointer`` and ``__remove_pointer`` for Objective-C++'s ``id`` and interfaces has been fixed.
-
 Bug Fixes to Attribute Support
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
- - Fixed crash when a parameter to the ``clang::annotate`` attribute evaluates to ``void``. See #GH119125
+
+- ``[[nodiscard]]`` is now respected on Objective-C and Objective-C++ methods.
+  (#GH141504)
 
 Bug Fixes to C++ Support
 ^^^^^^^^^^^^^^^^^^^^^^^^
-
-- Clang is now better at keeping track of friend function template instance contexts. (#GH55509)
-- The initialization kind of elements of structured bindings
-  direct-list-initialized from an array is corrected to direct-initialization.
+- Diagnose binding a reference to ``*nullptr`` during constant evaluation. (#GH48665)
+- Suppress ``-Wdeprecated-declarations`` in implicitly generated functions. (#GH147293)
+- Fix a crash when deleting a pointer to an incomplete array (#GH150359).
+- Fix an assertion failure when expression in assumption attribute
+  (``[[assume(expr)]]``) creates temporary objects.
 
 Bug Fixes to AST Handling
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Miscellaneous Bug Fixes
 ^^^^^^^^^^^^^^^^^^^^^^^
-
-- HTML tags in comments that span multiple lines are now parsed correctly by Clang's comment parser. (#GH120843)
 
 Miscellaneous Clang Crashes Fixed
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -194,18 +180,8 @@ AMDGPU Support
 NVPTX Support
 ^^^^^^^^^^^^^^
 
-Hexagon Support
-^^^^^^^^^^^^^^^
-
--  The default compilation target has been changed from V60 to V68.
-
 X86 Support
 ^^^^^^^^^^^
-
-- Disable ``-m[no-]avx10.1`` and switch ``-m[no-]avx10.2`` to alias of 512 bit
-  options.
-- Change ``-mno-avx10.1-512`` to alias of ``-mno-avx10.1-256`` to disable both
-  256 and 512 bit instructions.
 
 Arm and AArch64 Support
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -221,8 +197,6 @@ LoongArch Support
 
 RISC-V Support
 ^^^^^^^^^^^^^^
-
-- Add support for `-mtune=generic-ooo` (a generic out-of-order model).
 
 CUDA/HIP Language Changes
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -253,13 +227,11 @@ Fixed Point Support in Clang
 
 AST Matchers
 ------------
+- Ensure ``hasBitWidth`` doesn't crash on bit widths that are dependent on template
+  parameters.
 
 clang-format
 ------------
-
-- Adds ``BreakBeforeTemplateCloser`` option.
-- Adds ``BinPackLongBracedList`` option to override bin packing options in
-  long (20 item or more) braced list initializer lists.
 
 libclang
 --------
@@ -269,32 +241,24 @@ Code Completion
 
 Static Analyzer
 ---------------
-
-- Clang currently support extending lifetime of object bound to 
-  reference members of aggregates in CFG and ExprEngine, that are
-  created from default member initializer.
+- The Clang Static Analyzer now handles parenthesized initialization.
+  (#GH148875)
+- ``__datasizeof`` (C++) and ``_Countof`` (C) no longer cause a failed assertion
+  when given an operand of VLA type. (#GH151711)
 
 New features
 ^^^^^^^^^^^^
 
-A new flag - `-static-libclosure` was introduced to support statically linking
-the runtime for the Blocks extension on Windows. This flag currently only
-changes the code generation, and even then, only on Windows. This does not
-impact the linker behaviour like the other `-static-*` flags.
-
 Crash and bug fixes
 ^^^^^^^^^^^^^^^^^^^
+- Fixed a crash in the static analyzer that when the expression in an 
+  ``[[assume(expr)]]`` attribute was enclosed in parentheses.  (#GH151529)
 
 Improvements
 ^^^^^^^^^^^^
 
 Moved checkers
 ^^^^^^^^^^^^^^
-
-- After lots of improvements, the checker ``alpha.security.ArrayBoundV2`` is
-  renamed to ``security.ArrayBound``. As this checker is stable now, the old
-  checker ``alpha.security.ArrayBound`` (which was searching for the same kind
-  of bugs with an different, simpler and less accurate algorithm) is removed.
 
 .. _release-notes-sanitizers:
 
@@ -306,8 +270,9 @@ Python Binding Changes
 
 OpenMP Support
 --------------
-- Added support 'no_openmp_constructs' assumption clause.
-- Added support for 'omp stripe' directive.
+- Added parsing and semantic analysis support for the ``need_device_addr``
+  modifier in the ``adjust_args`` clause.
+- Allow array length to be omitted in array section subscript expression.
 
 Improvements
 ^^^^^^^^^^^^

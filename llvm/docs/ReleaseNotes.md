@@ -56,17 +56,8 @@ Makes programs 10x faster by doing Special New Thing.
 Changes to the LLVM IR
 ----------------------
 
-* The `nocapture` attribute has been replaced by `captures(none)`.
-* The constant expression variants of the following instructions have been
-  removed:
-
-  * `mul`
-
 Changes to LLVM infrastructure
 ------------------------------
-
-* Removed support for target intrinsics being defined in the target directories
-  themselves (i.e., the `TargetIntrinsicInfo` class).
 
 Changes to building LLVM
 ------------------------
@@ -76,6 +67,12 @@ Changes to TableGen
 
 Changes to Interprocedural Optimizations
 ----------------------------------------
+
+Changes to Vectorizers
+----------------------------------------
+
+* Added initial support for copyable elements in SLP, which models copyable
+  elements as add <element>, 0, i.e. uses identity constants for missing lanes.
 
 Changes to the AArch64 Backend
 ------------------------------
@@ -125,15 +122,6 @@ Changes to the Python bindings
 Changes to the C API
 --------------------
 
-* The following functions for creating constant expressions have been removed,
-  because the underlying constant expressions are no longer supported. Instead,
-  an instruction should be created using the `LLVMBuildXYZ` APIs, which will
-  constant fold the operands if possible and create an instruction otherwise:
-
-  * `LLVMConstMul`
-  * `LLVMConstNUWMul`
-  * `LLVMConstNSWMul`
-
 Changes to the CodeGen infrastructure
 -------------------------------------
 
@@ -149,16 +137,8 @@ Changes to the LLVM tools
 Changes to LLDB
 ---------------------------------
 
-* When building LLDB with Python support, the minimum version of Python is now
-  3.8.
-* LLDB now supports hardware watchpoints for AArch64 Windows targets. Windows
-  does not provide API to query the number of supported hardware watchpoints.
-  Therefore current implementation allows only 1 watchpoint, as tested with
-  Windows 11 on the Microsoft SQ2 and Snapdragon Elite X platforms.
-
-### Changes to lldb-dap
-
-* Breakpoints can now be set for specific columns within a line.
+* LLDB can now set breakpoints, show backtraces, and display variables when
+  debugging Wasm with supported runtimes (WAMR and V8).
 
 Changes to BOLT
 ---------------------------------
