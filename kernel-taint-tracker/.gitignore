@@ -1,2 +1,3 @@
 # ignore the build folder of the plugin pass
 /build
+/llvm-testcases
