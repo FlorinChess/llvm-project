@@ -167,7 +167,7 @@ private:
       return true;
     }
 
-    if (auto *CI = dyn_cast<CallInst>(val)) {
+    if (dyn_cast<CallInst>(val)) {
       // storing result of some function call: treat as unknown (conservative approach)
       return false;
     }
@@ -269,6 +269,7 @@ private:
 
         if(isTaintSink(CI)) {
           // sink found
+          INDENT errs() << "[SINK WARNING] Tainted data passed to sink!\n";
         } else if (isTainted(CI) && !isTaintSource(CI) && !F.isDeclaration()) {
           for (unsigned i = 0; i < CI->arg_size(); ++i) {
             Value* arg = CI->getArgOperand(i);
@@ -291,13 +292,6 @@ private:
       }
     }
 
-    for (Instruction &I : instructions(F)) {
-      if (CallInst *CI = dyn_cast<CallInst>(&I)) {
-        if(isTaintSink(CI)) {
-          INDENT errs() << "[SINK WARNING] Tainted data passed to sink: " << knownSinkFunctions << "\n";
-        }
-      }
-    }
     depth--;
   }
 
