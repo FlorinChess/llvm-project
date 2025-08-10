@@ -23,6 +23,9 @@
 #include <unordered_set>
 #include <vector>
 
+#define INDENT_H for (unsigned i = 0; i < depth * 4; ++i) { errs() << " "; } 
+#define INDENT INDENT_H errs() << "|--> ";
+
 using namespace llvm;
 
 namespace {
@@ -85,78 +88,42 @@ private:
     // step 2: taint sources and associated operands/buffers
     for (auto& source : taintSources) {
       errs() << "Element in list of sources: " << *source << "\n"; 
-      taintSourceAndOperands(source);
-    }
+      if (Instruction* I = dyn_cast<Instruction>(source)) {
+        errs() << "This source can be casted to instruction\n";
+        
+        Function* function = I->getFunction();
+        
+        std::set<unsigned> indices;
+        std::queue<Value*> func_worklist;
+        func_worklist.push(source);
+        
+        // Taint previous instructions associated with the source
+        taintSourceAndOperands(source);
 
-
-    // step 3: taint propagation (basic forward)
-    while (!worklist.empty()) {
-      Value* value = worklist.front(); worklist.pop();
-
-
-      for (User* U : value->users()) {
-        // errs() << "[Propagation] user of tainted data: " << *U << "\n";
-        if (Instruction *I = dyn_cast<Instruction>(U)) {
-          if (tainted.find(I) == tainted.end()) {
-            tainted.insert(I);
-            worklist.push(I);
-            errs() << "[Propagation] Taint propagated to: ";
-            I->print(errs()); errs() << "\n";
-          }
-        }
-      }
-    }
-
-    for (Function &F : M) {
-      for (Instruction &I : instructions(F)) {
-        if (CallInst *CI = dyn_cast<CallInst>(&I)) {
-          if (tainted.count(CI) != 0 && !isTaintSink(CI) && 
-            !isTaintSource(CI) && !F.isDeclaration()) {
-            for (unsigned i = 0; i < CI->arg_size(); ++i) {
-              Value* arg = CI->getArgOperand(i);
-              
-              std::set<unsigned> parameterIndices;
-              if (tainted.count(arg) != 0) {
-                errs() << "Adding index " << i << " to tainted param indexes\n";
-                parameterIndices.insert(i);
-              }
-
-              errs() << "Number of tainted params: " << parameterIndices.size() << "\n";
-              
-              bool parametersAreTainted = parameterIndices.size() > 0;
-              if (parametersAreTainted) {
-                runAnalysisOnFunction(*CI->getCalledFunction(), parametersAreTainted, parameterIndices);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // step 4: report if tainted data reaches a sink
-    for (Function &F : M) {
-      for (Instruction &I : instructions(F)) {
-        if (CallInst *CI = dyn_cast<CallInst>(&I)) {
-          if(isTaintSink(CI)) {
-          }
-        }
+        // Start traversing from the function containing the taint
+        unsigned depth = 0;
+        propagateToFunction(*function, worklist, false, indices, depth);
       }
     }
   
-    errs() << "Taint analysis complete!\n";
-    errs() << "______________________________________________________________________________________________________________\n";
+    errs() << "\nTaint analysis complete!\n\n";
+    errs() << "------------------------------------------------------------------------\n";
     for (Value* value : tainted) {
       errs() << "Tainted values: " << *value << "\n";
     }
   }
 
   bool taint(Value* value) {
-    if (tainted.find(value) == tainted.end()) {
+    if (!isTainted(value)) {
       errs() << "Tainted value: " << *value << "\n";
       tainted.insert(value);
       return true;
     }
     return false;
+  }
+
+  bool isTainted(Value* value) {
+    return tainted.find(value) != tainted.end();
   }
   
   bool isTaintSource(const CallInst* CI) {
@@ -173,7 +140,7 @@ private:
     return false;
   }
 
-  bool isTaintSink(CallInst* CI) {
+  bool isTaintSink(const CallInst* CI) {
     if (!CI) return false;
 
     if (Function *Callee = CI->getCalledFunction()) {
@@ -181,9 +148,9 @@ private:
         if (Callee->getName().contains(knownSinkFunction)) {
           for (unsigned i = 0; i < CI->arg_size(); ++i) {
             Value *arg = CI->getArgOperand(i);
-            errs() << "Checking arg: " << *arg << "\n";
-            if (tainted.count(arg)) {
-              errs() << "[SINK WARNING] Tainted data passed to sink: " << knownSinkFunction << "\n";
+            // errs() << "Checking arg: " << *arg << "\n";
+            if (isTainted(arg)) {
+              // errs() << "[SINK WARNING] Tainted data passed to sink: " << knownSinkFunction << "\n";
               return true;
             } 
           }
@@ -208,6 +175,9 @@ private:
     return false;
   }
 
+  /// @brief Looks for taint sources in the provided function and stores them in the provided buffer.
+  /// @param F Function in which to look for taint sources 
+  /// @param taintSources Buffer for storing taint sources
   void findTaintSourceInFunction(Function& F, std::vector<Value*> &taintSources) {
     if (F.isDeclaration()) return;
 
@@ -224,12 +194,12 @@ private:
     if (CallInst *CI = dyn_cast<CallInst>(source)) {
       for (unsigned i = 0; i < CI->arg_size(); ++i) {
         Value *arg = CI->getArgOperand(i);
-        errs() << "Argument: " << *arg << "\n";
+        // errs() << "Argument: " << *arg << "\n";
         
         // constants are immutable; no need to taint
         if (isa<Constant>(arg)) continue;
 
-        tainted.insert(arg);
+        taint(arg);
         worklist.push(arg);
         
         // most source function usually take a buffer 
@@ -237,8 +207,8 @@ private:
         // we need to taint the origin of that memory object
         Value* origin = getUnderlyingObject(arg); // MaxLookup: default = 10
 
-        if (tainted.count(origin) == 0) {
-          tainted.insert(origin);
+        if (!isTainted(origin)) {
+          taint(origin);
           worklist.push(origin);
           errs() << "[Source] Tainting origin of buffer: " << *origin << "\n";
         }
@@ -246,30 +216,33 @@ private:
     }
   }
 
-  bool runAnalysisOnFunction(Function &F, bool paramsTainted, std::set<unsigned>& taintedParametersIndices) {
-    errs() << "Processing function: " << F.getName() << "\n";
+  void propagateToFunction(Function &F, std::queue<Value*>& worklist, bool paramsTainted, std::set<unsigned>& taintedParametersIndices, unsigned& depth) {
+    // Indent to simulate stack trace
+    INDENT_H
+
+    errs() << "Processing function " << F.getName() << "():\n";
   
-    std::queue<Value*> worklist;
     int i = 0;
-    for (llvm::Argument& arg : F.args()) {
-      errs() << "Arg: " << arg.getName() << "\n";
-  
-      if (paramsTainted && taintedParametersIndices.find(i) != taintedParametersIndices.end()) {
-        worklist.push(&arg);
-        taint(&arg);
+    if (paramsTainted) {
+      for (llvm::Argument& arg : F.args()) {
+        // INDENT errs() << "Arg: " << arg.getName() << "\n";
+    
+        if (taintedParametersIndices.find(i) != taintedParametersIndices.end()) {
+          worklist.push(&arg);
+          INDENT taint(&arg);
+        }
       }
     }
 
     while (!worklist.empty()) {
-      errs() << "[Propagation] Worklist not empty\n";
 
       Value* value = worklist.front(); worklist.pop();
 
       for (User* U : value->users()) {
-        errs() << "[Propagation] user of tainted data: " << *U << "\n";
+        INDENT errs() << "[Propagation] Found user of tainted data: " << *U << "\n";
         if (Instruction* I = dyn_cast<Instruction>(U)) {
-          if (tainted.find(I) == tainted.end()) {
-            taint(I);
+          if (!isTainted(I)) {
+            INDENT taint(I);
             worklist.push(I);
           }
         }
@@ -278,8 +251,32 @@ private:
       if (StoreInst* SI = dyn_cast<StoreInst>(value)) {
         if (!storeIsClean(SI)) {
           Value* buffer = SI->getOperand(1);
-          taint(buffer);
+          INDENT taint(buffer);
           worklist.push(buffer);
+        }
+      } else if (CallInst *CI = dyn_cast<CallInst>(value)) {
+        // INDENT errs() << "Found potentially tainted function call\n";
+
+        if(isTaintSink(CI)) {
+          // sink found
+        } else if (isTainted(CI) && !isTaintSource(CI) && !F.isDeclaration()) {
+          for (unsigned i = 0; i < CI->arg_size(); ++i) {
+            Value* arg = CI->getArgOperand(i);
+            
+            std::set<unsigned> parameterIndices;
+            if (isTainted(arg)) {
+              INDENT errs() << "[Propagation] Adding index " << i << " to tainted param indexes\n";
+              parameterIndices.insert(i);
+            }
+
+            // INDENT errs() << "Number of tainted params: " << parameterIndices.size() << "\n";
+            
+            bool parametersAreTainted = parameterIndices.size() > 0;
+            if (parametersAreTainted) {
+              std::queue<Value*> funcWorklist;
+              propagateToFunction(*CI->getCalledFunction(), funcWorklist, parametersAreTainted, parameterIndices, depth += 1);
+            }
+          }
         }
       }
     }
@@ -287,14 +284,11 @@ private:
     for (Instruction &I : instructions(F)) {
       if (CallInst *CI = dyn_cast<CallInst>(&I)) {
         if(isTaintSink(CI)) {
-          errs() << "[SINK WARNING] Tainted data passed to sink: " << knownSinkFunctions << "\n";
+          INDENT errs() << "[SINK WARNING] Tainted data passed to sink: " << knownSinkFunctions << "\n";
         }
       }
     }
-  
-    bool returnTainted = false;
-
-    return returnTainted;
+    depth--;
   }
 
   class Experiment {
