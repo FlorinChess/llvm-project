@@ -70,6 +70,16 @@ private:
     return TS_Untainted;
   }
 
+  static void printWorklist(std::queue<Value*>& worklist) {
+    std::queue<Value*> tmp = worklist;
+    errs() << "Current worklist:\n";
+    while (!tmp.empty()) {
+      Value* value = tmp.front();
+      errs() <<  "ELEMENT: " << *value << "\n";
+      tmp.pop();
+    } 
+  }
+
   std::unordered_set<Value *> tainted;
   std::queue<Value*> worklist;
   std::unordered_map<const Function *, bool> TaintSummary;
@@ -105,11 +115,19 @@ private:
       }
     }
   
-    errs() << "\nTaint analysis complete!\n\n";
-    errs() << "------------------------------------------------------------------------\n";
+    printTaintedValues();
+  }
+
+  void printTaintedValues() {
+    errs() << "----------------------------------------------------------------------------\nTainted values: \n";
     for (Value* value : tainted) {
-      errs() << "Tainted values: " << *value << "\n";
+      errs() << *value << "\n";
     }
+    errs() << "----------------------------------------------------------------------------\n\n";
+  }
+
+  void removeTaint(Value* value) {
+    tainted.erase(value);
   }
 
   bool taint(Value* value) {
@@ -151,7 +169,7 @@ private:
             if (isTainted(arg)) {
               // errs() << "[SINK WARNING] Tainted data passed to sink: " << knownSinkFunction << "\n";
               return true;
-            } 
+            }
           }
         }
       }
@@ -202,12 +220,12 @@ private:
         worklist.push(arg);
         
         bool originFound = false;
-
+        Value* tmp = arg;
         // most source function usually take a buffer 
         // that is passed through using an intermediate operand
         // we need to taint the origin of that memory object
         while (!originFound) {
-          Value* origin = getUnderlyingObject(arg); // MaxLookup: default = 10
+          Value* origin = getUnderlyingObject(tmp); // MaxLookup: default = 10
           // errs() << "Origin of " << *arg << " --> " << *origin << "\n";
           if (dyn_cast<AllocaInst>(origin)) {
             if (!isTainted(origin)) {
@@ -219,9 +237,11 @@ private:
           } else if (LoadInst* LI = dyn_cast<LoadInst>(origin)) {
             Value* operand = LI->getOperand(0);
             // errs() << "Operand: " << *operand << "\n";
-            arg = operand;
+            tmp = operand;
           }
         }
+
+        worklist.push(arg);
       }
     }
   }
