@@ -11,8 +11,10 @@ mkdir -p "$OUT_DIR"
 for src_file in ./c-testcases/*; do
     
     # Get the filename without the path and extension
-    filename="${src_file##*/}"
-    OUT_FILE="${filename}.ll" 
+    filename=${src_file##*/}
+    name_no_ext=${filename%.c}
+    
+    OUT_FILE="${name_no_ext}.ll"
 
     # Compile the file with clang
     clang -S -emit-llvm "${src_file}" -o "${OUT_DIR}"/"${OUT_FILE}"
