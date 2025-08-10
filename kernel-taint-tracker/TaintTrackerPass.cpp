@@ -47,7 +47,6 @@ static llvm::StringRef stateName(TaintState s) {
 
 class TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> {
 
-  
 public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
     // FunctionAnalysisManager
@@ -98,7 +97,7 @@ private:
         func_worklist.push(source);
         
         // Taint previous instructions associated with the source
-        taintSourceAndOperands(source);
+        taintSourceOperands(source);
 
         // Start traversing from the function containing the taint
         unsigned depth = 0;
@@ -190,11 +189,11 @@ private:
     }
   }
 
-  void taintSourceAndOperands(Value* source) {
+  void taintSourceOperands(Value* source) {
     if (CallInst *CI = dyn_cast<CallInst>(source)) {
       for (unsigned i = 0; i < CI->arg_size(); ++i) {
         Value *arg = CI->getArgOperand(i);
-        // errs() << "Argument: " << *arg << "\n";
+        errs() << "Argument: " << *arg << "\n";
         
         // constants are immutable; no need to taint
         if (isa<Constant>(arg)) continue;
@@ -202,15 +201,26 @@ private:
         taint(arg);
         worklist.push(arg);
         
+        bool originFound = false;
+
         // most source function usually take a buffer 
         // that is passed through using an intermediate operand
         // we need to taint the origin of that memory object
-        Value* origin = getUnderlyingObject(arg); // MaxLookup: default = 10
-
-        if (!isTainted(origin)) {
-          taint(origin);
-          worklist.push(origin);
-          errs() << "[Source] Tainting origin of buffer: " << *origin << "\n";
+        while (!originFound) {
+          Value* origin = getUnderlyingObject(arg); // MaxLookup: default = 10
+          // errs() << "Origin of " << *arg << " --> " << *origin << "\n";
+          if (dyn_cast<AllocaInst>(origin)) {
+            if (!isTainted(origin)) {
+              taint(origin);
+              worklist.push(origin);
+              originFound = true;
+              errs() << "[Source] Tainting origin of buffer: " << *origin << "\n";
+            }
+          } else if (LoadInst* LI = dyn_cast<LoadInst>(origin)) {
+            Value* operand = LI->getOperand(0);
+            // errs() << "Operand: " << *operand << "\n";
+            arg = operand;
+          }
         }
       }
     }
@@ -222,7 +232,7 @@ private:
 
     errs() << "Processing function " << F.getName() << "():\n";
   
-    int i = 0;
+    unsigned i = 0;
     if (paramsTainted) {
       for (llvm::Argument& arg : F.args()) {
         // INDENT errs() << "Arg: " << arg.getName() << "\n";
