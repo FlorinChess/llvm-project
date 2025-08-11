@@ -13,7 +13,7 @@ void pass_input(char* input_buffer) {
   // same tainted memory object
   char* intermediate_buffer = input_buffer;
 
-  print_input(intermediate_buffer);
+  print_input(intermediate_buffer); // also tainted
 }
 
 int main(int argc, char* argv[]) {

@@ -19,6 +19,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/MemorySSA.h"
+#include <algorithm>
 #include <queue>
 #include <unordered_set>
 #include <vector>
@@ -80,7 +81,7 @@ private:
     } 
   }
 
-  std::unordered_set<Value *> tainted;
+  std::set<Value *> tainted;
   std::queue<Value*> worklist;
   std::unordered_map<const Function *, bool> TaintSummary;
   const char* knownSourceFunctions[3] = { "fgets", "gets", "scanf" };
@@ -100,18 +101,15 @@ private:
       if (Instruction* I = dyn_cast<Instruction>(source)) {
         errs() << "This source can be casted to instruction\n";
         
-        Function* function = I->getFunction();
-        
-        std::set<unsigned> indices;
-        std::queue<Value*> func_worklist;
-        func_worklist.push(source);
         
         // Taint previous instructions associated with the source
         taintSourceOperands(source);
-
+        
         // Start traversing from the function containing the taint
+        Function* function = I->getFunction();
+        std::set<unsigned> indices;
         unsigned depth = 0;
-        propagateToFunction(*function, worklist, false, indices, depth);
+        propagateToFunction(*function, false, indices, depth);
       }
     }
   
@@ -136,6 +134,7 @@ private:
       tainted.insert(value);
       return true;
     }
+    errs() << "Value already tainted: " << *value << "\n";
     return false;
   }
 
@@ -178,17 +177,22 @@ private:
     return false;
   }
 
-  bool storeIsClean(const StoreInst *SI) const {
-    const Value* val = SI->getValueOperand();
-    if (isa<Constant>(val)) {
+  bool storeIsClean(const StoreInst *SI) {
+    // errs() << "Is store clean: " << *SI <<"\n";
+    Value* value = SI->getOperand(0);
+    // errs() << "Operand 0: " << *value <<"\n";
+
+    if (isa<Constant>(value)) {
+      // errs() << "Is a constant!\n";
       // store of a constant (e.g., zero) -> treat as untainted
       return true;
     }
 
-    if (dyn_cast<CallInst>(val)) {
+    if (dyn_cast<CallInst>(value)) {
       // storing result of some function call: treat as unknown (conservative approach)
       return false;
     }
+    
     return false;
   }
 
@@ -211,13 +215,12 @@ private:
     if (CallInst *CI = dyn_cast<CallInst>(source)) {
       for (unsigned i = 0; i < CI->arg_size(); ++i) {
         Value *arg = CI->getArgOperand(i);
-        errs() << "Argument: " << *arg << "\n";
+        // errs() << "Argument: " << *arg << "\n";
         
         // constants are immutable; no need to taint
         if (isa<Constant>(arg)) continue;
 
         taint(arg);
-        worklist.push(arg);
         
         bool originFound = false;
         Value* tmp = arg;
@@ -246,11 +249,15 @@ private:
     }
   }
 
-  void propagateToFunction(Function &F, std::queue<Value*>& worklist, bool paramsTainted, std::set<unsigned>& taintedParametersIndices, unsigned& depth) {
+  /// @brief Propagates taint taints recursively through functions starting from the function F   
+  /// @param F Starting function for recursive taint propagation
+  /// @param worklist Queue of operands to be processed within the given function
+  /// @param paramsTainted Flag that specifies if parameters should be marked as tainted
+  /// @param taintedParametersIndices Indices of tainted parameters of the function
+  /// @param depth Current depth of recursion; mainly used for presentation
+  void propagateToFunction(Function &F, bool paramsTainted, std::set<unsigned>& taintedParametersIndices, unsigned& depth) {
     // Indent to simulate stack trace
-    INDENT_H
-
-    errs() << "Processing function " << F.getName() << "():\n";
+    INDENT_H errs() << "Processing function " << F.getName() << "():\n";
   
     unsigned i = 0;
     if (paramsTainted) {
@@ -264,51 +271,61 @@ private:
       }
     }
 
-    while (!worklist.empty()) {
-
-      Value* value = worklist.front(); worklist.pop();
-
-      for (User* U : value->users()) {
-        INDENT errs() << "[Propagation] Found user of tainted data: " << *U << "\n";
-        if (Instruction* I = dyn_cast<Instruction>(U)) {
-          if (!isTainted(I)) {
-            INDENT taint(I);
-            worklist.push(I);
-          }
-        }
-      }
-
-      if (StoreInst* SI = dyn_cast<StoreInst>(value)) {
-        if (!storeIsClean(SI)) {
-          Value* buffer = SI->getOperand(1);
-          INDENT taint(buffer);
-          worklist.push(buffer);
-        }
-      } else if (CallInst *CI = dyn_cast<CallInst>(value)) {
-        // INDENT errs() << "Found potentially tainted function call\n";
-
-        if(isTaintSink(CI)) {
-          // sink found
-          INDENT errs() << "[SINK WARNING] Tainted data passed to sink!\n";
-        } else if (isTainted(CI) && !isTaintSource(CI) && !F.isDeclaration()) {
-          for (unsigned i = 0; i < CI->arg_size(); ++i) {
-            Value* arg = CI->getArgOperand(i);
+    for (Instruction& I : instructions(F)) {
+      for (Value* operand : I.operands()) {
+        // If one of the operands is tainted, figure out if the rest should be tainted too
+        if (!isTainted(operand)) continue;
+        
+        INDENT errs() << "[Propagation] Found user of tainted data: " << I << "\n";
+        if (StoreInst* SI = dyn_cast<StoreInst>(&I)) {
+          if (storeIsClean(SI)) {
+            Value* storeDest = SI->getOperand(1);
+            INDENT errs() << "Clean store dest: " << *storeDest << "\n";
+            // removeTaint(storeDest); // This operand was overwritten with clean data
+            continue;
             
-            std::set<unsigned> parameterIndices;
-            if (isTainted(arg)) {
-              INDENT errs() << "[Propagation] Adding index " << i << " to tainted param indexes\n";
-              parameterIndices.insert(i);
+          } else {
+            Value* buffer = SI->getOperand(1);
+            INDENT taint(buffer);
+            worklist.push(buffer);
+            INDENT errs() << "Unclean store buffer: " << *buffer << "\n";
+          }
+        } else if (CallInst *CI = dyn_cast<CallInst>(&I)) {
+          Function* calledFunction = CI->getCalledFunction();
+          INDENT errs() << "[Propagation] Found potentially tainted function call to " << calledFunction->getName() << "()\n";
+
+          if(isTaintSink(CI)) {
+            INDENT errs() << "[SINK WARNING] Tainted data passed to sink!\n";
+          } else if (!isTaintSource(CI) && !calledFunction->isDeclaration()) {
+            
+          // taint parameters
+            std::set<unsigned> parameterIndices; 
+            for (unsigned i = 0; i < CI->arg_size(); ++i) {
+              Value* arg = CI->getArgOperand(i);
+              
+              if (isTainted(arg)) {
+                INDENT errs() << "[Propagation] Adding index " << i << " to tainted param indexes\n";
+                parameterIndices.insert(i);
+              }
             }
 
             // INDENT errs() << "Number of tainted params: " << parameterIndices.size() << "\n";
             
             bool parametersAreTainted = parameterIndices.size() > 0;
             if (parametersAreTainted) {
-              std::queue<Value*> funcWorklist;
-              propagateToFunction(*CI->getCalledFunction(), funcWorklist, parametersAreTainted, parameterIndices, depth += 1);
+              INDENT taint(&I);
+              propagateToFunction(*CI->getCalledFunction(), parametersAreTainted, parameterIndices, depth += 1);
+              continue;
+              // TODO: edge case: we pass a tainted buffer to the function, the function clears it
+              // when control comes back to the caller, operand holding reference to the buffer
+              // should also be cleared
+              // IDEA: use either return value or the parameterIndices to determine if the state
+              // of any of the buffers has changed
             }
           }
         }
+      
+        INDENT taint(&I);
       }
     }
 
