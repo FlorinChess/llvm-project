@@ -26,6 +26,7 @@
 
 #define INDENT_H for (unsigned i = 0; i < depth * 4; ++i) { errs() << " "; } 
 #define INDENT INDENT_H errs() << "|--> ";
+#define USERSPACE
 
 using namespace llvm;
 
@@ -84,8 +85,28 @@ private:
   std::set<Value *> tainted;
   std::queue<Value*> worklist;
   std::unordered_map<const Function *, bool> TaintSummary;
+
+#ifdef USERSPACE
   const char* knownSourceFunctions[3] = { "fgets", "gets", "scanf" };
   const char* knownSinkFunctions[6] = { "system", "fputs", "fprintf", "printf", "puts", "fwrite" };
+#else
+  const char* knownSourceFunctions[8] = 
+  { 
+    // accessing memory from userspace
+    "copy_from_user", "__copy_from_user", "get_user", "strncpy_from_user",
+    
+    // network input
+    "recvmsg", "__sys_recvfrom", "tcp_recvmsg", "udp_recvmsg",
+
+    // filesystem input
+    "vfs_read", "kernel_read"
+  };
+  const char* knownSinkFunctions[6] = 
+  { 
+    "system", "fputs", "fprintf", "printf", "puts", "fwrite" 
+  };
+#endif
+
   void runPass(Module &M) {
     errs() << "Performing taint analysis on module " << M.getName() << "\n";
 
