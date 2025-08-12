@@ -278,6 +278,7 @@ private:
         if (taintedParametersIndices.find(i) != taintedParametersIndices.end()) {
           INDENT taint(&arg);
         }
+        i++;
       }
     }
 
