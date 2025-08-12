@@ -109,7 +109,7 @@ private:
     for (auto& source : taintSources) {
       errs() << "Element in list of sources: " << *source << "\n"; 
       if (Instruction* I = dyn_cast<Instruction>(source)) {
-        errs() << "This source can be casted to instruction\n";
+        // errs() << "This source can be casted to instruction\n";
         
         
         // Taint previous instructions associated with the source
@@ -234,35 +234,36 @@ private:
         Value *arg = CI->getArgOperand(i);
         // errs() << "Argument: " << *arg << "\n";
         
-        // constants are immutable; no need to taint
-        if (isa<Constant>(arg)) continue;
-
-        taint(arg);
+        if (!isa<Constant>(arg)) taint(arg);
         
-        bool originFound = false;
         Value* tmp = arg;
         // most source function usually take a buffer 
         // that is passed through using an intermediate operand
         // we need to taint the origin of that memory object
-        while (!originFound) {
-          Value* origin = getUnderlyingObject(tmp); // MaxLookup: default = 10
-          // errs() << "Origin of " << *arg << " --> " << *origin << "\n";
-          if (dyn_cast<AllocaInst>(origin)) {
-            if (!isTainted(origin)) {
-              originFound = true;
-              taint(origin);
-              errs() << "[Source] Tainting origin of buffer: " << *origin << "\n";
-            }
-          } else if (LoadInst* LI = dyn_cast<LoadInst>(origin)) {
-            Value* operand = LI->getOperand(0);
-            errs() << "Operand: " << *operand << "\n";
-            errs() << "Operand type: " << *operand->getType() << "\n";
-            tmp = operand;
-          } else if (GlobalVariable* GV = dyn_cast<GlobalVariable>(origin)) {
-            // this is an externally defined variable and cannot tracked back
-            // if (GV->isDeclaration() && GV->hasExternalLinkage()) 
-            break;
+track_origin:
+        Value* origin = getUnderlyingObject(tmp); // MaxLookup: default = 10
+        errs() << "Origin of " << *arg << " --> " << *origin << "\n";
+        if (dyn_cast<AllocaInst>(origin)) {
+          if (!isTainted(origin)) {
+            taint(origin);
+            errs() << "[Source] Tainting origin of buffer: " << *origin << "\n";
           }
+        } else if (GlobalVariable* GV = dyn_cast<GlobalVariable>(origin)) {
+          errs() << "Global variable: " << *GV << "\n";
+          if (GV->isConstant()) {
+            // immutable; no need to taint
+            errs() << "[Source] Constant immutable global variable: " << *GV << "\n";
+          } else if (!GV->isDeclaration()) {
+            // this may also be used in some cases !GV->hasExternalLinkage()
+            // mutable and is not an externally defined global variable
+            taint(GV);
+            errs() << "[Source] Tainting global symbol: " << *GV << "\n";
+          }
+        } else if (LoadInst* LI = dyn_cast<LoadInst>(origin)) {
+          // errs() << "Operand: " << *operand << "\n";
+          Value* operand = LI->getOperand(0);
+          tmp = operand;
+          goto track_origin;
         }
       }
     }
