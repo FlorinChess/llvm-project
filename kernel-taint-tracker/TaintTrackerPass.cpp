@@ -288,17 +288,15 @@ private:
         
         INDENT errs() << "[Propagation] Found user of tainted data: " << I << "\n";
         if (StoreInst* SI = dyn_cast<StoreInst>(&I)) {
+          Value* storeDest = SI->getOperand(1);
+
           if (storeIsClean(SI)) {
-            Value* storeDest = SI->getOperand(1);
             INDENT errs() << "Clean store dest: " << *storeDest << "\n";
-            // removeTaint(storeDest); // This operand was overwritten with clean data
+            INDENT removeTaint(storeDest); // This operand was overwritten with clean data
             continue;
-            
           } else {
-            Value* buffer = SI->getOperand(1);
-            INDENT taint(buffer);
-            worklist.push(buffer);
-            INDENT errs() << "Unclean store buffer: " << *buffer << "\n";
+            INDENT taint(storeDest);
+            INDENT errs() << "Unclean store buffer: " << *storeDest << "\n";
           }
         } else if (CallInst *CI = dyn_cast<CallInst>(&I)) {
           Function* calledFunction = CI->getCalledFunction();
