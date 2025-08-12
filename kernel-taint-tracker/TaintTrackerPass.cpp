@@ -252,8 +252,13 @@ private:
             }
           } else if (LoadInst* LI = dyn_cast<LoadInst>(origin)) {
             Value* operand = LI->getOperand(0);
-            // errs() << "Operand: " << *operand << "\n";
+            errs() << "Operand: " << *operand << "\n";
+            errs() << "Operand type: " << *operand->getType() << "\n";
             tmp = operand;
+          } else if (GlobalVariable* GV = dyn_cast<GlobalVariable>(origin)) {
+            // this is an externally defined variable and cannot tracked back
+            // if (GV->isDeclaration() && GV->hasExternalLinkage()) 
+            break;
           }
         }
       }
