@@ -225,6 +225,9 @@ private:
     }
   }
 
+  /// @brief Taints non-constant operands in the source instruction and
+  /// tries to track back to the initial allocation
+  /// @param source Call instruction to a know source function 
   void taintSourceOperands(Value* source) {
     if (CallInst *CI = dyn_cast<CallInst>(source)) {
       for (unsigned i = 0; i < CI->arg_size(); ++i) {
