@@ -79,7 +79,7 @@ private:
   const char* knownSourceFunctions[3] = { "fgets", "gets", "scanf" };
   const char* knownSinkFunctions[6] = { "system", "fputs", "fprintf", "printf", "puts", "fwrite" };
 #else
-  const char* knownSourceFunctions[10] = 
+  const char* knownSourceFunctions[7] = 
   { 
     // accessing memory from userspace
     // macros: "copy_from_user", "__copy_from_user", "get_user"
@@ -219,7 +219,7 @@ private:
   void findTaintSourceInFunction(Function& F, std::vector<Value*> &taintSources) {
     if (F.isDeclaration()) return;
 
-    errs() << "Checking function " << F.getName() << " for taint sources...\n";
+    errs() << "Checking function " << F.getName() << "() for taint sources...\n";
     for (Instruction &I : instructions(F)) {
       if (CallInst *CI = dyn_cast<CallInst>(&I)) {
         if (isTaintSource(CI)) {
