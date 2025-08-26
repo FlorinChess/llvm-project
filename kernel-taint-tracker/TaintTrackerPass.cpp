@@ -26,7 +26,7 @@
 
 #define INDENT_H for (unsigned i = 0; i < depth * 4; ++i) { errs() << " "; } 
 #define INDENT INDENT_H errs() << "|--> ";
-#define USERSPACE
+// #define USERSPACE
 
 using namespace llvm;
 
@@ -79,10 +79,11 @@ private:
   const char* knownSourceFunctions[3] = { "fgets", "gets", "scanf" };
   const char* knownSinkFunctions[6] = { "system", "fputs", "fprintf", "printf", "puts", "fwrite" };
 #else
-  const char* knownSourceFunctions[8] = 
+  const char* knownSourceFunctions[10] = 
   { 
     // accessing memory from userspace
-    "copy_from_user", "__copy_from_user", "get_user", "strncpy_from_user",
+    // macros: "copy_from_user", "__copy_from_user", "get_user"
+    "strncpy_from_user",
     
     // network input
     "recvmsg", "__sys_recvfrom", "tcp_recvmsg", "udp_recvmsg",
@@ -90,9 +91,9 @@ private:
     // filesystem input
     "vfs_read", "kernel_read"
   };
-  const char* knownSinkFunctions[6] = 
+  const char* knownSinkFunctions[2] = 
   { 
-    "system", "fputs", "fprintf", "printf", "puts", "fwrite" 
+    "kmalloc", "printk" 
   };
 #endif
 
@@ -109,9 +110,6 @@ private:
     for (auto& source : taintSources) {
       errs() << "Element in list of sources: " << *source << "\n"; 
       if (Instruction* I = dyn_cast<Instruction>(source)) {
-        // errs() << "This source can be casted to instruction\n";
-        
-        
         // Taint previous instructions associated with the source
         taintSourceOperands(source);
         
@@ -128,6 +126,11 @@ private:
 
   /// @brief Prints the set of tainted instructions
   void printTaintedValues() {
+    if (tainted.empty()) {
+      errs() << "\nNo tainted data!\n\n";
+      return;
+    } 
+
     errs() << "----------------------------------------------------------------------------\nTainted values: \n";
     for (Value* value : tainted) {
       errs() << *value << "\n";
