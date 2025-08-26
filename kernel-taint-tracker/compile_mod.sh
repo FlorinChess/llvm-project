@@ -13,5 +13,5 @@ clang -emit-llvm -S ~/BACPROJECT/Kernel-Module/linux_kernel_module.c -o ./llvm-t
   -include /usr/src/linux-headers-6.8.0-65-generic/include/linux/compiler_types.h \
   -target x86_64-pc-linux-gnu \
   -fno-discard-value-names \
-  -O1 -fno-rtti -fno-exceptions -fno-asynchronous-unwind-tables \
+  -O0 -fno-rtti -fno-exceptions -fno-asynchronous-unwind-tables \
 
