@@ -222,8 +222,10 @@ private:
     errs() << "Checking function " << F.getName() << " for taint sources...\n";
     for (Instruction &I : instructions(F)) {
       if (CallInst *CI = dyn_cast<CallInst>(&I)) {
-        if (isTaintSource(CI))
+        if (isTaintSource(CI)) {
           taintSources.push_back(CI);
+          errs() << "Taint source found: " << *CI << "\n";
+        }
       }
     }
   }
@@ -235,7 +237,6 @@ private:
     if (CallInst *CI = dyn_cast<CallInst>(source)) {
       for (unsigned i = 0; i < CI->arg_size(); ++i) {
         Value *arg = CI->getArgOperand(i);
-        // errs() << "Argument: " << *arg << "\n";
         
         if (!isa<Constant>(arg)) taint(arg);
         
@@ -252,10 +253,10 @@ track_origin:
             errs() << "[Source] Tainting origin of buffer: " << *origin << "\n";
           }
         } else if (GlobalVariable* GV = dyn_cast<GlobalVariable>(origin)) {
-          errs() << "Global variable: " << *GV << "\n";
+          // errs() << "Global variable: " << *GV << "\n";
           if (GV->isConstant()) {
             // immutable; no need to taint
-            errs() << "[Source] Constant immutable global variable: " << *GV << "\n";
+            // errs() << "[Source] Constant immutable global variable: " << *GV << "\n";
           } else if (!GV->isDeclaration()) {
             // this may also be used in some cases !GV->hasExternalLinkage()
             // mutable and is not an externally defined global variable
@@ -285,8 +286,6 @@ track_origin:
     unsigned i = 0;
     if (paramsTainted) {
       for (llvm::Argument& arg : F.args()) {
-        // INDENT errs() << "Arg: " << arg.getName() << "\n";
-    
         if (taintedParametersIndices.find(i) != taintedParametersIndices.end()) {
           INDENT taint(&arg);
         }
