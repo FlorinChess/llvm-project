@@ -32,21 +32,6 @@ using namespace llvm;
 
 namespace {
 
-enum TaintState {
-  TS_Untainted = 0,
-  TS_Tainted,
-  TS_Unknown
-};
-
-static llvm::StringRef stateName(TaintState s) {
-  switch (s) {
-  case TS_Untainted: return "Untainted";
-  case TS_Tainted:   return "Tainted";
-  case TS_Unknown:   return "Unknown";
-  }
-  return "??";
-}
-
 class TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> {
 
 public:
@@ -58,22 +43,7 @@ public:
   }
   static bool isRequired() { return true; }
 private:
-
-  // memState: MemoryAccess* -> TaintState
-  DenseMap<const MemoryAccess*, TaintState> memState;
-
-  // valState: Value* (loads / instructions) -> TaintState
-  DenseMap<const Value*, TaintState> valState;
-
-  // small helper to max/meet states (Tainted wins)
-  static TaintState meet(TaintState a, TaintState b) {
-    if (a == TS_Tainted || b == TS_Tainted) return TS_Tainted;
-    if (a == TS_Unknown || b == TS_Unknown) return TS_Unknown;
-    return TS_Untainted;
-  }
-
-  std::set<Value *> tainted;
-  std::unordered_map<const Function *, bool> TaintSummary;
+  std::set<Value*> tainted;
 
 #ifdef USERSPACE
   const char* knownSourceFunctions[3] = { "fgets", "gets", "scanf" };
