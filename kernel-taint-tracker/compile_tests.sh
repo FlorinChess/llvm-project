@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# Usage: ./run.sh
-
 OUT_DIR="./llvm-testcases"
 
 # Create output directory if it doesn't exist
