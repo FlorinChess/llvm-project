@@ -91,9 +91,9 @@ private:
     // filesystem input
     "vfs_read", "kernel_read"
   };
-  const char* knownSinkFunctions[2] = 
+  const char* knownSinkFunctions[3] = 
   { 
-    "kmalloc", "printk" 
+    "kmalloc", "kmalloc_large", "printk" 
   };
 #endif
 
@@ -108,7 +108,7 @@ private:
 
     // step 2: taint sources and associated operands/buffers
     for (auto& source : taintSources) {
-      errs() << "Element in list of sources: " << *source << "\n"; 
+      // errs() << "Element in list of sources: " << *source << "\n"; 
       if (Instruction* I = dyn_cast<Instruction>(source)) {
         // Taint previous instructions associated with the source
         taintSourceOperands(source);
@@ -224,16 +224,20 @@ private:
       if (CallInst *CI = dyn_cast<CallInst>(&I)) {
         if (isTaintSource(CI)) {
           taintSources.push_back(CI);
-          errs() << "Taint source found: " << *CI << "\n";
+          errs() << "[Source] Taint source found: " << *CI << "\n";
         }
       }
     }
+
+    errs() << "Source detection finished!\n"; 
   }
 
   /// @brief Taints non-constant operands in the source instruction and
   /// tries to track back to the initial allocation
   /// @param source Call instruction to a know source function 
   void taintSourceOperands(Value* source) {
+    errs() << "[Source] Tracking origin of source instructions...\n";
+
     if (CallInst *CI = dyn_cast<CallInst>(source)) {
       for (unsigned i = 0; i < CI->arg_size(); ++i) {
         Value *arg = CI->getArgOperand(i);
@@ -246,7 +250,7 @@ private:
         // we need to taint the origin of that memory object
 track_origin:
         Value* origin = getUnderlyingObject(tmp); // MaxLookup: default = 10
-        errs() << "Origin of " << *arg << " --> " << *origin << "\n";
+        errs() << "[Source] Origin of " << *arg << " --> " << *origin << "\n";
         if (dyn_cast<AllocaInst>(origin)) {
           if (!isTainted(origin)) {
             taint(origin);
