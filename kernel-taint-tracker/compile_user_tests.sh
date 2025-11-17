@@ -15,7 +15,7 @@ for src_file in ./c-testcases/*; do
     OUT_FILE="${name_no_ext}.ll"
 
     # Compile the file with clang
-    clang -S -emit-llvm "${src_file}" -o "${OUT_DIR}"/"${OUT_FILE}"
+    clang -S -emit-llvm -fno-discard-value-names "${src_file}" -o "${OUT_DIR}"/"${OUT_FILE}"
 
     # Check if compilation succeeded
     if [ $? -eq 0 ]; then
