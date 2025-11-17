@@ -22,11 +22,15 @@
 #include <algorithm>
 #include <queue>
 #include <unordered_set>
+#include <fstream>
+#include <sstream>
 #include <vector>
+#include <cstring>
 
+// #define USERSPACE
+#define MAX_DEPTH 20
 #define INDENT_H for (unsigned i = 0; i < depth * 4; ++i) { errs() << " "; } 
 #define INDENT INDENT_H errs() << "|--> ";
-// #define USERSPACE
 
 using namespace llvm;
 
@@ -34,40 +38,38 @@ namespace {
 
 class TaintTrackerPass : public PassInfoMixin<TaintTrackerPass> {
 
+struct TaintedValue {
+  Value* value;
+  Function* functionContext;
+
+  bool operator<(const TaintedValue& other) const {
+    if (value < other.value) return true;
+    if (value > other.value) return false;
+    return functionContext < other.functionContext;
+  }
+};
+
 public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
-    // FunctionAnalysisManager
-  //  auto& FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
     runPass(M);
     return PreservedAnalyses::all();
   }
   static bool isRequired() { return true; }
 private:
-  std::set<Value*> tainted;
-
-#ifdef USERSPACE
-  const char* knownSourceFunctions[3] = { "fgets", "gets", "scanf" };
-  const char* knownSinkFunctions[6] = { "system", "fputs", "fprintf", "printf", "puts", "fwrite" };
-#else
-  const char* knownSourceFunctions[7] = 
-  { 
-    // accessing memory from userspace
-    // macros: "copy_from_user", "__copy_from_user", "get_user"
-    "strncpy_from_user",
-    
-    // network input
-    "recvmsg", "__sys_recvfrom", "tcp_recvmsg", "udp_recvmsg",
-
-    // filesystem input
-    "vfs_read", "kernel_read"
-  };
-  const char* knownSinkFunctions[3] = 
-  { 
-    "kmalloc", "kmalloc_large", "printk" 
-  };
-#endif
+  Function* currentFunctionContext = nullptr;
+  std::set<TaintedValue> tainted;
+  std::vector<char*> knownSourceFunctions;
+  std::vector<char*> knownSinkFunctions;
 
   void runPass(Module &M) {
+    // try to load config
+    if (loadConfiguration() != 0)
+    {
+      cleanup();
+      errs() << "Could not load configuration for taint tracker pass!\n";
+      return;
+    }
+
     errs() << "Performing taint analysis on module " << M.getName() << "\n";
 
     // step 1: identify known taint sources
@@ -92,6 +94,66 @@ private:
     }
   
     printTaintedValues();
+
+    cleanup();
+  }
+
+  int loadConfiguration() {
+    #ifdef USERSPACE 
+    // read source config
+    if(readConfigFile("./config/user_taint_sources.txt", knownSourceFunctions) != 0) return -1;
+    
+    // read sink config
+    if(readConfigFile("./config/user_taint_sinks.txt", knownSinkFunctions) != 0) return -1;
+    #else
+    // read source config
+    if(readConfigFile("./config/kernel_taint_sources.txt", knownSourceFunctions) != 0) return -1;
+    
+    // read sink config
+    if(readConfigFile("./config/kernel_taint_sinks.txt", knownSinkFunctions) != 0) return -1;
+    #endif
+
+    return 0;
+  }
+
+  int readConfigFile(const char* filename, std::vector<char*>& list)
+  {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        errs() << "Error opening file!\n";
+        return -1;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string token;
+
+        while (std::getline(ss, token, ',')) {
+            // Trim whitespace (optional)
+            while (!token.empty() && isspace(token.front()))
+                token.erase(token.begin());
+            while (!token.empty() && isspace(token.back()))
+                token.pop_back();
+
+            // Allocate C-string and copy
+            char* cstr = new char[token.size() + 1];
+            std::strcpy(cstr, token.c_str());
+
+            list.push_back(cstr);
+        }
+    }
+    file.close();
+    return 0;
+  }
+
+  void cleanup() {
+    for (char* s : knownSourceFunctions) {
+      delete s;
+    }
+    for (char* s : knownSinkFunctions) {
+      delete s;
+    }
   }
 
   /// @brief Prints the set of tainted instructions
@@ -102,8 +164,8 @@ private:
     } 
 
     errs() << "----------------------------------------------------------------------------\nTainted values: \n";
-    for (Value* value : tainted) {
-      errs() << *value << "\n";
+    for (const auto& tv : tainted) {
+      errs() << *(tv.value) << "\n";
     }
     errs() << "----------------------------------------------------------------------------\n\n";
   }
@@ -112,21 +174,31 @@ private:
   /// @param value Value to remove
   void removeTaint(Value* value) {
     errs() << "Removing taint from: " << *value << "\n";
-    tainted.erase(value);
+
+    for (const auto& tv : tainted) {
+      if (tv.value == value) {
+        tainted.erase(tv);
+        return;
+      } 
+    }
   }
 
   bool taint(Value* value) {
     if (!isTainted(value)) {
-      errs() << "Tainted value: " << *value << "\n";
-      tainted.insert(value);
+      // errs() << "Tainted value: " << *value << "\n";
+
+      tainted.insert({value, currentFunctionContext});
       return true;
     }
-    errs() << "Value already tainted: " << *value << "\n";
+    // errs() << "Value already tainted: " << *value << "\n";
     return false;
   }
 
   bool isTainted(Value* value) {
-    return tainted.find(value) != tainted.end();
+    for (const auto& tv : tainted) {
+      if (tv.value == value) return true;
+    }
+    return false;
   }
   
   bool isTaintSource(const CallInst* CI) {
@@ -249,19 +321,22 @@ track_origin:
 
   /// @brief Propagates taint taints recursively through functions starting from the function F   
   /// @param F Starting function for recursive taint propagation
-  /// @param worklist Queue of operands to be processed within the given function
   /// @param paramsTainted Flag that specifies if parameters should be marked as tainted
   /// @param taintedParametersIndices Indices of tainted parameters of the function
   /// @param depth Current depth of recursion; mainly used for presentation
   void propagateToFunction(Function &F, bool paramsTainted, std::set<unsigned>& taintedParametersIndices, unsigned& depth) {
+    currentFunctionContext = &F;
+
+    if (depth > MAX_DEPTH) return;
+
     // Indent to simulate stack trace
-    INDENT_H errs() << "Processing function " << F.getName() << "():\n";
+    INDENT_H errs() << "Propagating taint information to function " << F.getName() << "():\n";
   
     unsigned i = 0;
     if (paramsTainted) {
       for (llvm::Argument& arg : F.args()) {
         if (taintedParametersIndices.find(i) != taintedParametersIndices.end()) {
-          INDENT taint(&arg);
+          taint(&arg);
         }
         i++;
       }
@@ -281,16 +356,17 @@ track_origin:
             INDENT removeTaint(storeDest); // This operand was overwritten with clean data
             continue;
           } else {
-            INDENT taint(storeDest);
-            INDENT errs() << "Unclean store buffer: " << *storeDest << "\n";
+            taint(storeDest);
+            // INDENT taint(storeDest);
+            INDENT errs() << "[Propagation] Tainting store destination: " << *storeDest << "\n";
           }
         } else if (CallInst *CI = dyn_cast<CallInst>(&I)) {
           Function* calledFunction = CI->getCalledFunction();
-          INDENT errs() << "[Propagation] Found potentially tainted function call to " << calledFunction->getName() << "()\n";
 
           if(isTaintSink(CI)) {
-            INDENT errs() << "[SINK WARNING] Tainted data passed to sink!\n";
+            INDENT errs() << "[SINK WARNING] Tainted data passed to sink! Building data flow summary...\n";
           } else if (!isTaintSource(CI) && !calledFunction->isDeclaration()) {
+            INDENT errs() << "[Propagation] Found potentially tainted function call to " << calledFunction->getName() << "()\n";
             
           // taint parameters
             std::set<unsigned> parameterIndices; 
@@ -298,16 +374,14 @@ track_origin:
               Value* arg = CI->getArgOperand(i);
               
               if (isTainted(arg)) {
-                INDENT errs() << "[Propagation] Adding index " << i << " to tainted param indexes\n";
+                INDENT errs() << "[Propagation] Adding index " << i << " to tainted param indeces\n";
                 parameterIndices.insert(i);
               }
             }
-
-            // INDENT errs() << "Number of tainted params: " << parameterIndices.size() << "\n";
             
             bool parametersAreTainted = parameterIndices.size() > 0;
             if (parametersAreTainted) {
-              INDENT taint(&I);
+              taint(&I);
               propagateToFunction(*CI->getCalledFunction(), parametersAreTainted, parameterIndices, depth += 1);
               continue;
               // TODO: edge case: we pass a tainted buffer to the function, the function clears it
@@ -319,7 +393,7 @@ track_origin:
           }
         }
       
-        INDENT taint(&I);
+        taint(&I);
       }
     }
 
@@ -327,222 +401,6 @@ track_origin:
   }
   
 }; // end TaintTrackerPass class
-
-class Experiment {
-// // Initialize memState for all MemoryAccesses with Unknown and seed taint sources/clean stores
-// void initializeMemoryStates(MemorySSA &MSSA) {
-//   memState.clear();
-//   valState.clear();
-
-//   // default all memory accesses to Unknown
-//   for (auto &MA : MSSA.getMemoryAccessList()) {
-//     memState[MA] = TS_Unknown;
-//   }
-
-//   // Seed taint sources and simple clean stores
-//   for (auto &BB : *MSSA.getFunction()) {
-//     for (Instruction &I : BB) {
-//       if (auto *CI = dyn_cast<CallInst>(&I)) {
-//         if (isTaintSource(CI)) {
-//           // The MemoryAccess corresponding to this call should be tainted (it writes tainted input)
-//           const MemoryAccess *MA = MSSA.getMemoryAccess(CI);
-//           if (MA) memState[MA] = TS_Tainted;
-//         }
-//       } else if (auto *SI = dyn_cast<StoreInst>(&I)) {
-//         // The MemoryAccess for this store: if it's storing a constant, mark untainted
-//         const MemoryAccess *MA = MSSA.getMemoryAccess(SI);
-//         if (MA && storeIsClean(SI)) {
-//           memState[MA] = TS_Untainted;
-//         }
-//       }
-//     }
-//   }
-// }
-
-// // Given a MemoryAccess that is a MemoryDef, compute its transfer function
-// TaintState transferForDef(const MemoryDef *DefMA, MemorySSA &MSSA) {
-//   if (!DefMA) return TS_Unknown;
-
-//   const Instruction *I = DefMA->getMemoryInst();
-//   if (!I) return TS_Unknown;
-
-//   // Get the incoming state (state of the defining access)
-//   const MemoryAccess *defining = DefMA->getDefiningAccess();
-//   TaintState incoming = TS_Unknown;
-//   if (defining) incoming = memState.lookup(defining);
-
-//   // If the def is a call to a taint source, it's tainted
-//   if (const CallInst *CI = dyn_cast<CallInst>(I)) {
-//     if (isTaintSource(CI)) return TS_Tainted;
-
-//     // if the call is a known "clean" writer (like memset with zero) you could mark Untainted; otherwise Unknown
-//     // For simplicity treat other calls conservative: Unknown (unless previously initialized).
-//     return meet(memState.lookup(DefMA), incoming); // preserve previously seeded state (if any)
-//   }
-
-//   // If it's a store, we inspect stored value
-//   if (const StoreInst *SI = dyn_cast<StoreInst>(I)) {
-//     const Value *stored = SI->getValueOperand();
-
-//     // If the stored value is a constant -> clean
-//     if (isa<Constant>(stored)) {
-//       return TS_Untainted;
-//     }
-
-//     // If the stored value is a load, we can ask what the load read from:
-//     if (const LoadInst *LI = dyn_cast<LoadInst>(stored)) {
-//       const MemoryAccess *loadMA = MSSA.getMemoryAccess(LI);
-//       if (loadMA) {
-//         // value's taint equals the mem state of memory the load depended on
-//         TaintState loaded = TS_Unknown;
-//         const MemoryAccess *def = loadMA->getDefiningAccess();
-//         if (def) loaded = memState.lookup(def);
-//         return meet(loaded, incoming);
-//       }
-//     }
-
-//     // If stored value is an instruction with valState, use it
-//     if (valState.count(stored)) {
-//       return meet(valState.lookup(stored), incoming);
-//     }
-
-//     // Otherwise conservative: unknown (or tainted if incoming was tainted)
-//     return incoming;
-//   }
-
-//   // Other kinds of MemoryDef (e.g., call that clobbers memory): preserve seeded state or incoming
-//   return incoming;
-// }
-
-// // For a MemoryUse, state is state of the defining access
-// TaintState transferForUse(MemoryAccess *UseMA) {
-//   if (!UseMA) return TS_Unknown;
-//   MemoryAccess *def = UseMA->getDefiningAccess();
-//   if (!def) return TS_Unknown;
-//   return memState.lookup(def);
-// }
-
-// // Run the fixed-point over all MemoryAccesses
-// void computeFixedPoint(MemorySSA &MSSA) {
-//   // simple worklist: iterate until stable
-//   bool changed = true;
-//   unsigned iter = 0;
-//   while (changed) {
-//     changed = false;
-//     ++iter;
-//     // iterate all memory accesses
-//     for (auto &MA : MSSA.getMemoryAccessList()) {
-//       const MemoryAccess *access = MA;
-//       TaintState old = memState.lookup(access);
-//       TaintState neu = old;
-
-//       if (isa<MemoryDef>(access)) {
-//         neu = transferForDef(access, MSSA);
-//       } else if (isa<MemoryUse>(access)) {
-//         neu = transferForUse(access);
-//       } else if (isa<MemoryPhi>(access)) {
-//         // merge incoming values for MemoryPhi
-//         TaintState acc = TS_Untainted;
-//         const MemoryPhi *Phi = cast<MemoryPhi>(access);
-//         unsigned N = Phi->getNumIncomingValues();
-//         if (N == 0) acc = TS_Unknown;
-//         for (unsigned i = 0; i < N; ++i) {
-//           const MemoryAccess *in = Phi->getIncomingValue(i);
-//           if (in) acc = meet(acc, memState.lookup(in));
-//           else acc = meet(acc, TS_Unknown);
-//         }
-//         neu = acc;
-//       }
-
-//       if (neu != old) {
-//         memState[access] = neu;
-//         changed = true;
-//       }
-//     } // end for all MA
-//     // safety: avoid infinite loops (shouldn't happen here)
-//     if (iter > 1000) break;
-//   } // end while changed
-
-//   // After memState is stable, set valState for loads
-//   for (auto &BB : *MSSA.getFunction()) {
-//     for (Instruction &I : BB) {
-//       if (const LoadInst *LI = dyn_cast<LoadInst>(&I)) {
-//         const MemoryAccess *MA = MSSA.getMemoryAccess(LI);
-//         if (MA) {
-//           const MemoryAccess *def = MA->getDefiningAccess();
-//           TaintState s = TS_Unknown;
-//           if (def) s = memState.lookup(def);
-//           valState[LI] = s;
-//         } else {
-//           valState[LI] = TS_Unknown;
-//         }
-//       } else {
-//         // For non-load instructions we could propagate value taint from operands
-//         // (not necessary for this minimal demo)
-//       }
-//     }
-//   }
-// }
-
-// // Check calls that are sinks. For a call instruction CI, find the MemoryAccess associated with the call
-// // and check whether reads that the call will do are tainted.
-// void checkSinks(Function &F, MemorySSA &MSSA) {
-//   for (auto &BB : F) {
-//     for (Instruction &I : BB) {
-//       if (auto *CI = dyn_cast<CallInst>(&I)) {
-//         if (!isTaintSink(CI)) continue;
-
-//         const MemoryAccess *callMA = MSSA.getMemoryAccess(CI);
-//         if (!callMA) continue;
-
-//         TaintState s = TS_Unknown;
-//         // For a call that reads memory, the MemoryAccess is often a MemoryUse (or combined)
-//         // We use memState[ callMA ] to determine whether underlying memory that call may read is tainted.
-//         s = memState.lookup(callMA);
-
-//         if (s == TS_Tainted) {
-//           errs() << "Tainted memory may reach sink '" << CI->getCalledFunction()->getName() << "' in function "
-//                  << F.getName() << " at: ";
-//           CI->print(errs());
-//           errs() << "\n";
-//         } else {
-//           // Additionally, check arguments that are pointers: if pointer value was loaded from tainted memory earlier,
-//           // valState might capture that. We'll check pointer args that are instructions (e.g., GEPs derived from alloca).
-//           for (unsigned i = 0, e = CI->getNumArgOperands(); i != e; ++i) {
-//             Value *arg = CI->getArgOperand(i);
-//             if (valState.count(arg) && valState.lookup(arg) == TS_Tainted) {
-//               errs() << "Tainted value passed as argument " << i << " to sink at: ";
-//               CI->print(errs()); errs() << "\n";
-//             }
-//           }
-//         }
-//       }
-//     }
-//   }
-// }
-
-// bool runOnFunction(Function &F) override {
-//   if (F.isDeclaration()) return false;
-
-//   // Build MemorySSA
-//   MemorySSAWrapperPass *MSSAWP = &getAnalysis<MemorySSAWrapperPass>();
-//   MemorySSA &MSSA = MSSAWP->getMSSA();
-
-//   errs() << "Running MemorySSA taint analysis on function: " << F.getName() << "\n";
-
-//   // Initialize mem state (seed taint sources and trivial clean stores)
-//   initializeMemoryStates(MSSA);
-
-//   // Compute fixed-point
-//   computeFixedPoint(MSSA);
-
-//   // Check sinks
-//   checkSinks(F, MSSA);
-
-//   return false; // we don't modify IR
-// }
-};
-
 } // end anonymous namespace
 
 extern "C" ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo() {
@@ -552,7 +410,7 @@ extern "C" ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo() {
       PB.registerPipelineParsingCallback(
         [](StringRef Name, ModulePassManager &FPM,
            ArrayRef<PassBuilder::PipelineElement>) {
-          if (Name == "taint-tracker") {
+          if (Name == "taint-analysis") {
             FPM.addPass(TaintTrackerPass());
             return true;
           }
