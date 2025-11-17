@@ -1,0 +1,1 @@
+strncpy_from_user,recvmsg,__sys_recvfrom,tcp_recvmsg,udp_recvmsg,vfs_read,kernel_read

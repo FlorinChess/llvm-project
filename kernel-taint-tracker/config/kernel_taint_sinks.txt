@@ -1,0 +1,1 @@
+kmalloc,kmalloc_large,printk,copy_to_user

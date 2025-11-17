@@ -1,0 +1,1 @@
+system,fputs,fprintf,printf,puts,fwrite,execve,execv,execl,execle
