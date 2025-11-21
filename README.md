@@ -11,7 +11,10 @@ Any x86-64 Linux distribution. The [ninja](https://ninja-build.org/) build syste
 For testing purposes, you can use the ```opt``` utility in the LLVM toolchain. First, build the compiler pass out-of-tree by running the following commands from the root of the repository:
 
 ```shell
-cd kernel-taint-tracker /
+cd kernel-taint-tracker
+
+cmake -S . ./build
+
 ninja -C build 
 
 ```
@@ -28,6 +31,26 @@ By default, `opt` outputs the module bitcode of the LLVM modules specified by `<
 For more information on how `opt` operates, check out the [LLVM documentation](https://llvm.org/docs/CommandGuide/opt.html).
 
 ## Building the LLVM with the compiler pass integrated
+
+For setting up the build pipeline for LLVM and the necessary projects, run the following command:
+
+```shell
+cmake -S llvm -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=MinSizeRel \
+  -DLLVM_TARGETS_TO_BUILD="X86" \
+  -DLLVM_ENABLE_PROJECTS="clang" \
+  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_INCLUDE_EXAMPLES=OFF \
+  -DLLVM_INCLUDE_DOCS=OFF \
+  -DLLVM_BUILD_TOOLS=ON \
+  -DLLVM_PARALLEL_LINK_JOBS=1 \
+  -DLLVM_USE_LINKER=lld
+```
+After the build files are successfully generated, you can build LLVM and Clang using:
+
+```shell
+ninja -C build
+```
 
 #### Note:
 Depending on your machine, building all the necessary LLVM projects from source may take several hours!
